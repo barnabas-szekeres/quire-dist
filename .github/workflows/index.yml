@@ -1,0 +1,73 @@
+# Builds the signed App Store index (v1/index.json on GitHub Pages) from the curated catalog
+# (apps/<id>.toml) and the releases of this repository. Runs when a release is published
+# (repository_dispatch from the app's CI), when the catalog changes, and daily so the index never
+# expires.
+#
+# Secrets: QUIRE_INDEX_KEY / QUIRE_INDEX_PASSWORD (the index key; tablets trust its public half).
+name: index
+
+on:
+  repository_dispatch:
+    types: [app-released]
+  push:
+    branches: [main]
+    paths: ["apps/**", ".github/workflows/index.yml"]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: index
+  cancel-in-progress: false
+
+env:
+  QUIRE_CLI: "0.1.0"
+
+jobs:
+  index:
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the quire CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "cli-v$QUIRE_CLI" -p quire-linux-aarch64 -p SHA256SUMS -D "$RUNNER_TEMP/quire"
+          (cd "$RUNNER_TEMP/quire" && sha256sum -c --ignore-missing SHA256SUMS)
+          sudo install -m 755 "$RUNNER_TEMP/quire/quire-linux-aarch64" /usr/local/bin/quire
+      - name: Download the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p releases
+          gh release list --limit 1000 --json tagName --jq '.[].tagName' | grep -v '^cli-' | while read -r tag; do
+            gh release download "$tag" -D "releases/$tag"
+          done
+      - name: The index published before
+        run: curl -sSfL -o previous.json "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/v1/index.json" || rm -f previous.json
+      - name: Build and sign
+        env:
+          QUIRE_INDEX_KEY: ${{ secrets.QUIRE_INDEX_KEY }}
+          QUIRE_INDEX_PASSWORD: ${{ secrets.QUIRE_INDEX_PASSWORD }}
+        run: |
+          mkdir -p site/v1
+          previous=""
+          if [ -f previous.json ]; then previous="--previous previous.json"; fi
+          quire index build --catalog apps --releases releases \
+            --download-base "https://github.com/${{ github.repository }}/releases/download" \
+            $previous --out site/v1/index.json
+          quire index sign site/v1/index.json
+          cp README.md site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
