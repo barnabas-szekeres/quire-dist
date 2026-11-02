@@ -1,7 +1,7 @@
 # Builds the signed App Store index (v1/index.json on GitHub Pages) from the curated catalog
 # (apps/<id>.toml) and the releases of this repository. Runs when a release is published
 # (repository_dispatch from the app's CI), when the catalog changes, and daily so the index never
-# expires.
+# expires. Pages also serves install.sh, the installer people run with curl.
 #
 # Secrets: QUIRE_INDEX_KEY / QUIRE_INDEX_PASSWORD (the index key; tablets trust its public half).
 name: index
@@ -11,7 +11,7 @@ on:
     types: [app-released]
   push:
     branches: [main]
-    paths: ["apps/**", ".github/workflows/index.yml"]
+    paths: ["apps/**", "install.sh", ".github/workflows/index.yml"]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -65,7 +65,7 @@ jobs:
             --download-base "https://github.com/${{ github.repository }}/releases/download" \
             $previous --out site/v1/index.json
           quire index sign site/v1/index.json
-          cp README.md site/
+          cp README.md install.sh site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
